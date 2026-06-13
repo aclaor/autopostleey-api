@@ -207,3 +207,263 @@ async def get_user_plan(user: dict = Depends(get_current_user)):
         "plan":    user.get("plan", "free"),
         "email":   user.get("email", "")
     }
+
+
+# ── PLATFORM PUBLISHING ───────────────────────────────────
+
+class PublishRequest(BaseModel):
+    post_id:   str = ""
+    content:   str = ""
+    platforms: list = []
+    image_url: str = ""
+    user_id:   str = ""
+
+async def publish_to_facebook(content: str, image_url: str, page_token: str, page_id: str) -> dict:
+    """Publish to Facebook Page"""
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            if image_url:
+                # Post with image
+                r = await client.post(
+                    f"https://graph.facebook.com/v21.0/{page_id}/photos",
+                    data={
+                        "url":          image_url,
+                        "caption":      content,
+                        "access_token": page_token
+                    }
+                )
+            else:
+                # Text only post
+                r = await client.post(
+                    f"https://graph.facebook.com/v21.0/{page_id}/feed",
+                    data={
+                        "message":      content,
+                        "access_token": page_token
+                    }
+                )
+            data = r.json()
+            if "id" in data:
+                return {"success": True,  "platform": "facebook", "post_id": data["id"]}
+            else:
+                return {"success": False, "platform": "facebook", "error": data.get("error", {}).get("message", "Unknown error")}
+    except Exception as e:
+        return {"success": False, "platform": "facebook", "error": str(e)}
+
+
+async def publish_to_discord(content: str, image_url: str, webhook_url: str) -> dict:
+    """Publish to Discord via webhook"""
+    try:
+        payload = {"content": content}
+        if image_url:
+            payload["embeds"] = [{"image": {"url": image_url}}]
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(webhook_url, json=payload)
+            if r.status_code in (200, 204):
+                return {"success": True,  "platform": "discord"}
+            else:
+                return {"success": False, "platform": "discord", "error": f"Status {r.status_code}"}
+    except Exception as e:
+        return {"success": False, "platform": "discord", "error": str(e)}
+
+
+async def publish_to_telegram(content: str, image_url: str, bot_token: str, chat_id: str) -> dict:
+    """Publish to Telegram channel"""
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            if image_url:
+                r = await client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendPhoto",
+                    json={"chat_id": chat_id, "photo": image_url, "caption": content}
+                )
+            else:
+                r = await client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": content, "parse_mode": "HTML"}
+                )
+            data = r.json()
+            if data.get("ok"):
+                return {"success": True,  "platform": "telegram"}
+            else:
+                return {"success": False, "platform": "telegram", "error": data.get("description", "Unknown error")}
+    except Exception as e:
+        return {"success": False, "platform": "telegram", "error": str(e)}
+
+
+async def get_user_connections(user_id: str) -> dict:
+    """Get user's platform connections from Supabase"""
+    if not SUPABASE_URL:
+        return {}
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                params={"user_id": f"eq.{user_id}", "select": "*"},
+                headers={"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}"}
+            )
+            if r.status_code == 200:
+                rows = r.json()
+                return {row["platform"]: row for row in rows}
+    except Exception as e:
+        print(f"Get connections error: {e}")
+    return {}
+
+
+async def update_post_status(post_id: str, status: str, error: str = None):
+    """Update post status in Supabase"""
+    if not SUPABASE_URL or not post_id:
+        return
+    try:
+        update_data = {
+            "status":    status,
+            "posted_at": datetime.utcnow().isoformat() if status == "posted" else None
+        }
+        if error:
+            update_data["error_msg"] = error
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            await client.patch(
+                f"{SUPABASE_URL}/rest/v1/autopostleey_posts",
+                params={"id": f"eq.{post_id}"},
+                headers={
+                    "apikey":        SUPABASE_ANON,
+                    "Authorization": f"Bearer {SUPABASE_ANON}",
+                    "Content-Type":  "application/json"
+                },
+                json=update_data
+            )
+    except Exception as e:
+        print(f"Update post status error: {e}")
+
+
+@app.post("/publish")
+async def publish_post(req: PublishRequest, user: dict = Depends(get_current_user)):
+    """Publish a post to selected platforms"""
+    if not req.content:
+        raise HTTPException(400, "Post content is required")
+
+    user_id = user.get("user_id") or req.user_id
+    if not user_id or user_id in ("guest", "anon"):
+        raise HTTPException(401, "Authentication required")
+
+    # Get user's platform connections
+    connections = await get_user_connections(user_id)
+
+    results  = []
+    success  = 0
+    failed   = 0
+
+    for platform in req.platforms:
+        conn = connections.get(platform, {})
+
+        if platform == "facebook":
+            page_token = conn.get("access_token", os.getenv("FB_PAGE_ACCESS_TOKEN", ""))
+            page_id    = conn.get("page_id",       os.getenv("FB_PAGE_ID", ""))
+            if page_token and page_id:
+                result = await publish_to_facebook(req.content, req.image_url, page_token, page_id)
+            else:
+                result = {"success": False, "platform": "facebook", "error": "Not connected"}
+
+        elif platform == "discord":
+            webhook = conn.get("webhook_url", os.getenv("DISCORD_WEBHOOK", ""))
+            if webhook:
+                result = await publish_to_discord(req.content, req.image_url, webhook)
+            else:
+                result = {"success": False, "platform": "discord", "error": "Not connected"}
+
+        elif platform == "telegram":
+            bot_token = conn.get("bot_token", os.getenv("TELEGRAM_BOT_TOKEN", ""))
+            chat_id   = conn.get("chat_id",   os.getenv("TELEGRAM_CHAT_ID", ""))
+            if bot_token and chat_id:
+                result = await publish_to_telegram(req.content, req.image_url, bot_token, chat_id)
+            else:
+                result = {"success": False, "platform": "telegram", "error": "Not connected"}
+
+        else:
+            result = {"success": False, "platform": platform, "error": "Platform coming soon"}
+
+        results.append(result)
+        if result["success"]: success += 1
+        else: failed += 1
+
+    # Update post status in Supabase
+    final_status = "posted" if success > 0 else "failed"
+    errors = [r.get("error") for r in results if not r["success"]]
+    await update_post_status(req.post_id, final_status, "; ".join(filter(None, errors)))
+
+    return {
+        "status":  final_status,
+        "success": success,
+        "failed":  failed,
+        "results": results
+    }
+
+
+# ── PLATFORM CONNECTIONS ──────────────────────────────────
+
+class ConnectionRequest(BaseModel):
+    platform:     str = ""
+    access_token: str = ""
+    page_id:      str = ""
+    page_name:    str = ""
+    webhook_url:  str = ""
+    bot_token:    str = ""
+    chat_id:      str = ""
+
+
+@app.post("/connections/save")
+async def save_connection(req: ConnectionRequest, user: dict = Depends(get_current_user)):
+    """Save a platform connection for the user"""
+    user_id = user.get("user_id")
+    if not user_id or user_id in ("guest", "anon"):
+        raise HTTPException(401, "Authentication required")
+
+    conn_data = {
+        "user_id":      user_id,
+        "platform":     req.platform,
+        "access_token": req.access_token or None,
+        "page_id":      req.page_id      or None,
+        "page_name":    req.page_name    or None,
+        "webhook_url":  req.webhook_url  or None,
+        "bot_token":    req.bot_token    or None,
+        "chat_id":      req.chat_id      or None,
+        "connected_at": datetime.utcnow().isoformat(),
+    }
+
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                headers={
+                    "apikey":        SUPABASE_ANON,
+                    "Authorization": f"Bearer {SUPABASE_ANON}",
+                    "Content-Type":  "application/json",
+                    "Prefer":        "resolution=merge-duplicates"
+                },
+                json=conn_data
+            )
+        if r.status_code in (200, 201):
+            return {"success": True, "platform": req.platform}
+        else:
+            raise HTTPException(500, f"Failed to save: {r.text}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/connections")
+async def get_connections(user: dict = Depends(get_current_user)):
+    """Get all platform connections for the user"""
+    user_id = user.get("user_id")
+    if not user_id or user_id in ("guest", "anon"):
+        return []
+    connections = await get_user_connections(user_id)
+    # Return safe version (no tokens)
+    safe = {}
+    for platform, conn in connections.items():
+        safe[platform] = {
+            "platform":  conn.get("platform"),
+            "page_name": conn.get("page_name"),
+            "connected": True,
+            "connected_at": conn.get("connected_at")
+        }
+    return safe
