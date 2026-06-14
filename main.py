@@ -530,3 +530,129 @@ async def facebook_data_deletion_get():
         "url": "https://autopostleey.com/deletion-confirmation.html",
         "confirmation_code": "autopostleey_deletion"
     }
+
+
+# ── FACEBOOK OAUTH ────────────────────────────────────────
+FB_APP_ID     = os.getenv("FB_APP_ID", "2167420754104440")
+FB_APP_SECRET = os.getenv("FB_APP_SECRET", "")
+FB_REDIRECT   = "https://autopostleey-api-production.up.railway.app/facebook/callback"
+
+@app.get("/facebook/auth")
+async def facebook_auth(user_id: str = ""):
+    """Redirect user to Facebook OAuth"""
+    import urllib.parse
+    params = {
+        "client_id":     FB_APP_ID,
+        "redirect_uri":  FB_REDIRECT,
+        "scope":         "pages_manage_posts,pages_read_engagement",
+        "state":         user_id,  # Pass user_id through state
+        "response_type": "code",
+    }
+    url = "https://www.facebook.com/dialog/oauth?" + urllib.parse.urlencode(params)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
+
+
+@app.get("/facebook/callback")
+async def facebook_callback(code: str = "", state: str = "", error: str = ""):
+    """Handle Facebook OAuth callback"""
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+
+    if error:
+        return RedirectResponse("https://autopostleey.com/dashboard?fb_error=cancelled")
+
+    if not code:
+        return RedirectResponse("https://autopostleey.com/dashboard?fb_error=no_code")
+
+    user_id = state  # user_id passed via state param
+
+    try:
+        # Exchange code for access token
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://graph.facebook.com/v21.0/oauth/access_token",
+                params={
+                    "client_id":     FB_APP_ID,
+                    "client_secret": FB_APP_SECRET,
+                    "redirect_uri":  FB_REDIRECT,
+                    "code":          code,
+                }
+            )
+            token_data = r.json()
+
+        if "error" in token_data:
+            print(f"Token exchange error: {token_data}")
+            return RedirectResponse("https://autopostleey.com/dashboard?fb_error=token_failed")
+
+        user_token = token_data.get("access_token")
+
+        # Get list of pages the user manages
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://graph.facebook.com/v21.0/me/accounts",
+                params={"access_token": user_token}
+            )
+            pages_data = r.json()
+
+        pages = pages_data.get("data", [])
+
+        if not pages:
+            return RedirectResponse("https://autopostleey.com/dashboard?fb_error=no_pages")
+
+        # Use first page (most users have one page)
+        page = pages[0]
+        page_token = page.get("access_token")
+        page_id    = page.get("id")
+        page_name  = page.get("name")
+
+        # Save connection to Supabase
+        if SUPABASE_URL and user_id:
+            conn_data = {
+                "user_id":      user_id,
+                "platform":     "facebook",
+                "access_token": page_token,
+                "page_id":      page_id,
+                "page_name":    page_name,
+                "connected_at": datetime.utcnow().isoformat(),
+            }
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={
+                        "apikey":        SUPABASE_ANON,
+                        "Authorization": f"Bearer {SUPABASE_ANON}",
+                        "Content-Type":  "application/json",
+                        "Prefer":        "resolution=merge-duplicates"
+                    },
+                    json=conn_data
+                )
+
+        # Redirect back to dashboard with success
+        params = urllib.parse.urlencode({
+            "fb_success": "1",
+            "page_name":  page_name or "Your Page"
+        })
+        return RedirectResponse(f"https://autopostleey.com/dashboard?{params}")
+
+    except Exception as e:
+        print(f"OAuth callback error: {e}")
+        return RedirectResponse("https://autopostleey.com/dashboard?fb_error=server_error")
+
+
+@app.get("/facebook/pages")
+async def get_facebook_pages(user_token: str = "", user: dict = Depends(get_current_user)):
+    """Get list of pages user can manage - for page selection UI"""
+    if not user_token:
+        raise HTTPException(400, "user_token required")
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://graph.facebook.com/v21.0/me/accounts",
+                params={"access_token": user_token}
+            )
+            data = r.json()
+        pages = [{"id": p["id"], "name": p["name"]} for p in data.get("data", [])]
+        return {"pages": pages}
+    except Exception as e:
+        raise HTTPException(500, str(e))
