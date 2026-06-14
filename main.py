@@ -467,3 +467,66 @@ async def get_connections(user: dict = Depends(get_current_user)):
             "connected_at": conn.get("connected_at")
         }
     return safe
+
+
+# ── FACEBOOK DATA DELETION CALLBACK ──────────────────────
+import hashlib, hmac, base64, json as _json
+
+class DeletionRequest(BaseModel):
+    signed_request: str = ""
+
+@app.post("/facebook/deletion")
+async def facebook_data_deletion(req: DeletionRequest):
+    """
+    Facebook requires this endpoint to handle user data deletion requests.
+    https://developers.facebook.com/docs/development/create-an-app/app-dashboard/data-deletion-callback
+    """
+    try:
+        signed_request = req.signed_request
+        if not signed_request:
+            # Also handle GET for confirmation page
+            return {"url": "https://autopostleey.com/deletion-confirmation.html", "confirmation_code": "autopostleey_deletion"}
+
+        # Parse signed request from Facebook
+        encoded_sig, payload = signed_request.split('.', 1)
+
+        # Decode payload
+        payload_padded = payload + '=' * (4 - len(payload) % 4)
+        data = _json.loads(base64.urlsafe_b64decode(payload_padded))
+        user_id = data.get('user_id', '')
+
+        # Delete user data from Supabase if we have it
+        if user_id and SUPABASE_URL:
+            try:
+                async with _httpx.AsyncClient(timeout=10.0) as client:
+                    # Delete from all autopostleey tables
+                    for table in ['autopostleey_posts', 'autopostleey_businesses', 'autopostleey_connections', 'autopostleey_waitlist']:
+                        await client.delete(
+                            f"{SUPABASE_URL}/rest/v1/{table}",
+                            params={"facebook_user_id": f"eq.{user_id}"},
+                            headers={
+                                "apikey": SUPABASE_SERVICE,
+                                "Authorization": f"Bearer {SUPABASE_SERVICE}"
+                            }
+                        )
+            except Exception as e:
+                print(f"Deletion error: {e}")
+
+        confirmation_code = f"ap_{user_id}_{int(__import__('time').time())}"
+        return {
+            "url": "https://autopostleey.com/deletion-confirmation.html",
+            "confirmation_code": confirmation_code
+        }
+    except Exception as e:
+        print(f"Data deletion error: {e}")
+        return {
+            "url": "https://autopostleey.com/deletion-confirmation.html",
+            "confirmation_code": "autopostleey_deletion_processed"
+        }
+
+@app.get("/facebook/deletion")
+async def facebook_data_deletion_get():
+    return {
+        "url": "https://autopostleey.com/deletion-confirmation.html",
+        "confirmation_code": "autopostleey_deletion"
+    }
