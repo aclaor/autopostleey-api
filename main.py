@@ -33,6 +33,7 @@ PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")
 PAYPAL_SECRET    = os.getenv("PAYPAL_SECRET", "")
 PAYPAL_BASE      = "https://api-m.paypal.com"
 DEV_TOKEN        = os.getenv("API_TOKEN", "autopostleey2025")
+CF_WORKER        = os.getenv("CF_WORKER_URL", "https://autopostleey-ai.alexclaor.workers.dev")
 
 # ── AUTH ──────────────────────────────────────────────────
 async def get_current_user(
@@ -389,9 +390,25 @@ async def publish_post(req: PublishRequest, user: dict = Depends(get_current_use
             handle   = conn.get("page_name", "")
             app_pass = conn.get("access_token", "")
             if handle and app_pass:
-                result = await publish_to_bluesky(req.content, req.image_url, handle, app_pass)
+                # Route through Cloudflare Worker (no domain restrictions)
+                try:
+                    async with _httpx.AsyncClient(timeout=30.0) as client:
+                        r = await client.post(
+                            f"{CF_WORKER}/bluesky/publish",
+                            json={{
+                                "handle":       handle,
+                                "app_password": app_pass,
+                                "content":      req.content,
+                                "image_url":    req.image_url or ""
+                            }}
+                        )
+                        result = r.json()
+                        if "success" not in result:
+                            result = {{"success": False, "platform": "bluesky", "error": "Worker error"}}
+                except Exception as e:
+                    result = {{"success": False, "platform": "bluesky", "error": str(e)}}
             else:
-                result = {"success": False, "platform": "bluesky", "error": "Not connected"}
+                result = {{"success": False, "platform": "bluesky", "error": "Not connected"}}
 
         elif platform == "google_business":
             token       = conn.get("access_token", "")
