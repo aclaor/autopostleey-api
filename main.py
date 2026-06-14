@@ -473,24 +473,45 @@ async def save_connection(req: ConnectionRequest, user: dict = Depends(get_curre
     }
 
     try:
-        async with _httpx.AsyncClient(timeout=10.0) as client:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            # Use upsert to handle duplicate user_id+platform
             r = await client.post(
                 f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
                 headers={
-                    "apikey":        SUPABASE_ANON,
-                    "Authorization": f"Bearer {SUPABASE_ANON}",
-                    "Content-Type":  "application/json",
-                    "Prefer":        "resolution=merge-duplicates"
+                    "apikey":           SUPABASE_ANON,
+                    "Authorization":    f"Bearer {SUPABASE_ANON}",
+                    "Content-Type":     "application/json",
+                    "Prefer":           "resolution=merge-duplicates,return=representation"
                 },
                 json=conn_data
             )
+        print(f"Save connection response: {r.status_code} {r.text[:200]}")
         if r.status_code in (200, 201):
             return {"success": True, "platform": req.platform}
+        # Try DELETE then INSERT if upsert fails
+        elif r.status_code in (409, 422, 500):
+            async with _httpx.AsyncClient(timeout=15.0) as client:
+                # Delete existing
+                await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    params={"user_id": f"eq.{user_id}", "platform": f"eq.{req.platform}"},
+                    headers={"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}"}
+                )
+                # Insert fresh
+                r2 = await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}", "Content-Type": "application/json"},
+                    json=conn_data
+                )
+            if r2.status_code in (200, 201):
+                return {"success": True, "platform": req.platform}
+            raise HTTPException(500, f"Failed to save after retry: {r2.text}")
         else:
             raise HTTPException(500, f"Failed to save: {r.text}")
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Save connection error: {e}")
         raise HTTPException(500, str(e))
 
 
