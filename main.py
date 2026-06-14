@@ -302,7 +302,7 @@ async def get_user_connections(user_id: str) -> dict:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
                 params={"user_id": f"eq.{user_id}", "select": "*"},
-                headers={"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}"}
+                headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
             )
             if r.status_code == 200:
                 rows = r.json()
@@ -478,8 +478,8 @@ async def save_connection(req: ConnectionRequest, user: dict = Depends(get_curre
             r = await client.post(
                 f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
                 headers={
-                    "apikey":           SUPABASE_ANON,
-                    "Authorization":    f"Bearer {SUPABASE_ANON}",
+                    "apikey":           SUPABASE_SERVICE,
+                    "Authorization":    f"Bearer {SUPABASE_SERVICE}",
                     "Content-Type":     "application/json",
                     "Prefer":           "resolution=merge-duplicates,return=representation"
                 },
