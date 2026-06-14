@@ -488,8 +488,8 @@ async def save_connection(req: ConnectionRequest, user: dict = Depends(get_curre
         print(f"Save connection response: {r.status_code} {r.text[:200]}")
         if r.status_code in (200, 201):
             return {"success": True, "platform": req.platform}
-        # Try DELETE then INSERT if upsert fails
-        elif r.status_code in (409, 422, 500):
+        # Try DELETE then INSERT if duplicate key
+        elif r.status_code in (409, 422, 500, 400):
             async with _httpx.AsyncClient(timeout=15.0) as client:
                 # Delete existing
                 await client.delete(
