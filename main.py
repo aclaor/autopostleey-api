@@ -48,37 +48,40 @@ async def get_current_user(
 
     token = authorization.split(" ", 1)[1]
 
-    # Decode JWT to get email
+    # Decode JWT locally — no external calls needed
     try:
-        import base64, json as _json
-        payload = token.split(".")[1]
-        payload += "=" * (4 - len(payload) % 4)
-        decoded = _json.loads(base64.b64decode(payload))
-        if decoded.get("email") == "alexclaor@gmail.com":
-            return {"user_id": decoded.get("sub", "admin"), "plan": "agency"}
-    except Exception:
-        pass
+        import base64 as _b64, json as _json
+        # JWT has 3 parts: header.payload.signature
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {"user_id": "guest", "plan": "free"}
 
-    if not SUPABASE_URL:
-        return {"user_id": "guest", "plan": "free"}
+        payload_b64 = parts[1]
+        # Add padding
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        decoded = _json.loads(_b64.b64decode(payload_b64.replace("-","+").replace("_","/")))
 
-    try:
-        async with _httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(
-                f"{SUPABASE_URL}/auth/v1/user",
-                headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_ANON}
-            )
-            if r.status_code != 200:
-                return {"user_id": "guest", "plan": "free"}
-        user = r.json()
-        meta = user.get("user_metadata", {})
-        return {
-            "user_id": user["id"],
-            "email":   user.get("email"),
-            "plan":    meta.get("plan", "free"),
-        }
-    except Exception:
-        return {"user_id": "guest", "plan": "free"}
+        user_id = decoded.get("sub", "")
+        email   = decoded.get("email", "")
+        meta    = decoded.get("user_metadata", {})
+        plan    = meta.get("plan", "free") if isinstance(meta, dict) else "free"
+        exp     = decoded.get("exp", 0)
+
+        # Check token not expired
+        import time
+        if exp and exp < time.time():
+            return {"user_id": "guest", "plan": "free"}
+
+        if user_id:
+            return {
+                "user_id": user_id,
+                "email":   email,
+                "plan":    plan,
+            }
+    except Exception as e:
+        print(f"JWT decode error: {e}")
+
+    return {"user_id": "guest", "plan": "free"}
 
 
 # ── PAYPAL ────────────────────────────────────────────────
