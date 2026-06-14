@@ -377,6 +377,30 @@ async def publish_post(req: PublishRequest, user: dict = Depends(get_current_use
             else:
                 result = {"success": False, "platform": "telegram", "error": "Not connected"}
 
+        elif platform == "threads":
+            token   = conn.get("access_token", "")
+            user_id = conn.get("page_id", "")
+            if token and user_id:
+                result = await publish_to_threads(req.content, req.image_url, token, user_id)
+            else:
+                result = {"success": False, "platform": "threads", "error": "Not connected"}
+
+        elif platform == "bluesky":
+            handle   = conn.get("page_name", "")
+            app_pass = conn.get("access_token", "")
+            if handle and app_pass:
+                result = await publish_to_bluesky(req.content, req.image_url, handle, app_pass)
+            else:
+                result = {"success": False, "platform": "bluesky", "error": "Not connected"}
+
+        elif platform == "google_business":
+            token       = conn.get("access_token", "")
+            location_id = conn.get("page_id", "")
+            if token and location_id:
+                result = await publish_to_google_business(req.content, req.image_url, token, location_id)
+            else:
+                result = {"success": False, "platform": "google_business", "error": "Not connected"}
+
         else:
             result = {"success": False, "platform": platform, "error": "Platform coming soon"}
 
@@ -656,3 +680,140 @@ async def get_facebook_pages(user_token: str = "", user: dict = Depends(get_curr
         return {"pages": pages}
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ── THREADS PUBLISHING ────────────────────────────────────
+async def publish_to_threads(content: str, image_url: str, access_token: str, user_id: str) -> dict:
+    """Publish to Threads via Meta Graph API"""
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            # Step 1: Create media container
+            payload = {
+                "media_type": "TEXT" if not image_url else "IMAGE",
+                "text": content,
+                "access_token": access_token
+            }
+            if image_url:
+                payload["image_url"] = image_url
+
+            r = await client.post(
+                f"https://graph.threads.net/v1.0/{user_id}/threads",
+                data=payload
+            )
+            data = r.json()
+            if "error" in data:
+                return {"success": False, "platform": "threads", "error": data["error"].get("message", "Unknown error")}
+
+            container_id = data.get("id")
+            if not container_id:
+                return {"success": False, "platform": "threads", "error": "No container ID returned"}
+
+            # Step 2: Publish the container
+            r2 = await client.post(
+                f"https://graph.threads.net/v1.0/{user_id}/threads_publish",
+                data={"creation_id": container_id, "access_token": access_token}
+            )
+            data2 = r2.json()
+            if "id" in data2:
+                return {"success": True, "platform": "threads", "post_id": data2["id"]}
+            return {"success": False, "platform": "threads", "error": data2.get("error", {}).get("message", "Publish failed")}
+    except Exception as e:
+        return {"success": False, "platform": "threads", "error": str(e)}
+
+
+# ── BLUESKY PUBLISHING ────────────────────────────────────
+async def publish_to_bluesky(content: str, image_url: str, handle: str, app_password: str) -> dict:
+    """Publish to Bluesky via AT Protocol"""
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            # Step 1: Get auth token
+            auth = await client.post(
+                "https://bsky.social/xrpc/com.atproto.server.createSession",
+                json={"identifier": handle, "password": app_password}
+            )
+            auth_data = auth.json()
+            if "error" in auth_data:
+                return {"success": False, "platform": "bluesky", "error": auth_data.get("message", "Auth failed")}
+
+            access_jwt = auth_data.get("accessJwt")
+            did        = auth_data.get("did")
+
+            # Step 2: Create post
+            post_record = {
+                "$type": "app.bsky.feed.post",
+                "text": content[:300],  # Bluesky 300 char limit
+                "createdAt": datetime.utcnow().isoformat() + "Z"
+            }
+
+            # Step 3: Upload image if provided
+            if image_url:
+                try:
+                    img_r = await client.get(image_url)
+                    blob_r = await client.post(
+                        "https://bsky.social/xrpc/com.atproto.repo.uploadBlob",
+                        content=img_r.content,
+                        headers={
+                            "Authorization": f"Bearer {access_jwt}",
+                            "Content-Type": "image/jpeg"
+                        }
+                    )
+                    blob_data = blob_r.json()
+                    if "blob" in blob_data:
+                        post_record["embed"] = {
+                            "$type": "app.bsky.embed.images",
+                            "images": [{
+                                "alt": content[:100],
+                                "image": blob_data["blob"]
+                            }]
+                        }
+                except Exception:
+                    pass  # Post without image if upload fails
+
+            r = await client.post(
+                "https://bsky.social/xrpc/com.atproto.repo.createRecord",
+                headers={"Authorization": f"Bearer {access_jwt}"},
+                json={
+                    "repo":       did,
+                    "collection": "app.bsky.feed.post",
+                    "record":     post_record
+                }
+            )
+            data = r.json()
+            if "uri" in data:
+                return {"success": True, "platform": "bluesky", "post_id": data["uri"]}
+            return {"success": False, "platform": "bluesky", "error": data.get("message", "Post failed")}
+    except Exception as e:
+        return {"success": False, "platform": "bluesky", "error": str(e)}
+
+
+# ── GOOGLE BUSINESS PROFILE PUBLISHING ────────────────────
+async def publish_to_google_business(content: str, image_url: str, access_token: str, location_id: str) -> dict:
+    """Publish to Google Business Profile"""
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            post_data = {
+                "languageCode": "en-US",
+                "summary": content,
+                "callToAction": {"actionType": "LEARN_MORE"},
+                "topicType": "STANDARD"
+            }
+            if image_url:
+                post_data["media"] = [{
+                    "mediaFormat": "PHOTO",
+                    "sourceUrl": image_url
+                }]
+
+            r = await client.post(
+                f"https://mybusiness.googleapis.com/v4/{location_id}/localPosts",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                },
+                json=post_data
+            )
+            data = r.json()
+            if "name" in data:
+                return {"success": True, "platform": "google_business", "post_id": data["name"]}
+            return {"success": False, "platform": "google_business", "error": data.get("error", {}).get("message", "Post failed")}
+    except Exception as e:
+        return {"success": False, "platform": "google_business", "error": str(e)}
