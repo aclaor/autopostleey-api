@@ -392,20 +392,20 @@ async def publish_post(req: PublishRequest, user: dict = Depends(get_current_use
                     async with _httpx.AsyncClient(timeout=30.0) as client:
                         r = await client.post(
                             f"{CF_WORKER}/bluesky/publish",
-                            json={{
+                            json={
                                 "handle":       handle,
                                 "app_password": app_pass,
                                 "content":      req.content,
                                 "image_url":    req.image_url or ""
-                            }}
+                            }
                         )
                         result = r.json()
                         if "success" not in result:
-                            result = {{"success": False, "platform": "bluesky", "error": "Worker error"}}
+                            result = {"success": False, "platform": "bluesky", "error": "Worker error"}
                 except Exception as e:
-                    result = {{"success": False, "platform": "bluesky", "error": str(e)}}
+                    result = {"success": False, "platform": "bluesky", "error": str(e)}
             else:
-                result = {{"success": False, "platform": "bluesky", "error": "Not connected"}}
+                result = {"success": False, "platform": "bluesky", "error": "Not connected"}
 
         elif platform == "google_business":
             token       = conn.get("access_token", "")
