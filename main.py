@@ -13,15 +13,9 @@ app = FastAPI(title="Autopostleey API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://autopostleey.com",
-        "https://www.autopostleey.com",
-        "http://localhost:3000",
-        "http://localhost:8080",
-        "*"
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
