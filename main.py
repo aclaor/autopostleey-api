@@ -430,6 +430,22 @@ async def publish_post(req: PublishRequest, user: dict = Depends(get_current_use
             else:
                 result = {"success": False, "platform": "twitter", "error": "Not connected"}
 
+        elif platform == "facebook":
+            token   = conn.get("access_token", "")
+            page_id = conn.get("page_id", "")
+            if token and page_id:
+                result = await publish_to_facebook(req.content, token, page_id)
+            else:
+                result = {"success": False, "platform": "facebook", "error": "Not connected"}
+
+        elif platform == "instagram":
+            token     = conn.get("access_token", "")
+            ig_usr_id = conn.get("page_id", "")
+            if token and ig_usr_id:
+                result = await publish_to_instagram(req.content, token, ig_usr_id, req.image_url or "")
+            else:
+                result = {"success": False, "platform": "instagram", "error": "Not connected"}
+
         else:
             result = {"success": False, "platform": platform, "error": "Platform coming soon"}
 
@@ -1294,3 +1310,282 @@ async def publish_to_twitter(content: str, access_token: str) -> dict:
             return {"success": False, "platform": "twitter", "error": f"HTTP {r.status_code}: {r.text[:200]}"}
     except Exception as e:
         return {"success": False, "platform": "twitter", "error": str(e)}
+
+
+# ── FACEBOOK OAUTH ────────────────────────────────────────
+FB_APP_ID     = os.getenv("FB_APP_ID", "474990059818223")
+FB_APP_SECRET = os.getenv("FB_APP_SECRET", "")
+FB_REDIRECT   = "https://autopostleey-api-production.up.railway.app/facebook/callback"
+
+@app.get("/facebook/auth")
+async def facebook_auth(user_id: str = ""):
+    """Redirect user to Facebook OAuth"""
+    import urllib.parse
+    params = {
+        "client_id":     FB_APP_ID,
+        "redirect_uri":  FB_REDIRECT,
+        "scope":         "pages_manage_posts,pages_read_engagement,pages_show_list",
+        "state":         user_id,
+        "response_type": "code",
+    }
+    url = "https://www.facebook.com/dialog/oauth?" + urllib.parse.urlencode(params)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
+
+
+@app.get("/facebook/callback")
+async def facebook_callback(code: str = "", state: str = "", error: str = ""):
+    """Handle Facebook OAuth callback"""
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+
+    if error:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=cancelled")
+    if not code:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=no_code")
+
+    user_id = state
+
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            # Exchange code for user token
+            r = await client.get(
+                "https://graph.facebook.com/v21.0/oauth/access_token",
+                params={
+                    "client_id":     FB_APP_ID,
+                    "client_secret": FB_APP_SECRET,
+                    "redirect_uri":  FB_REDIRECT,
+                    "code":          code,
+                }
+            )
+            token_data = r.json()
+
+        if "error" in token_data:
+            print(f"Facebook token error: {token_data}")
+            return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=token_failed")
+
+        user_token = token_data.get("access_token")
+
+        # Get pages the user manages
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://graph.facebook.com/v21.0/me/accounts",
+                params={"access_token": user_token}
+            )
+            pages_data = r.json()
+
+        pages = pages_data.get("data", [])
+
+        if not pages:
+            # No pages found — save user token instead
+            async with _httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(
+                    "https://graph.facebook.com/v21.0/me",
+                    params={"access_token": user_token, "fields": "id,name"}
+                )
+                me = r.json()
+            page_name = me.get("name", "Facebook User")
+            page_id   = me.get("id", "")
+            page_token = user_token
+        else:
+            # Use first page
+            page       = pages[0]
+            page_token = page.get("access_token")
+            page_id    = page.get("id")
+            page_name  = page.get("name")
+
+        # Save connection
+        if SUPABASE_URL and user_id:
+            conn_data = {
+                "user_id":      user_id,
+                "platform":     "facebook",
+                "access_token": page_token,
+                "page_id":      page_id,
+                "page_name":    page_name,
+                "connected_at": datetime.utcnow().isoformat(),
+            }
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    params={"user_id": f"eq.{user_id}", "platform": "eq.facebook"},
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                )
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                    json=conn_data
+                )
+
+        params = urllib.parse.urlencode({"fb_success": "1", "page_name": page_name})
+        return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
+
+    except Exception as e:
+        print(f"Facebook OAuth error: {e}")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=server_error")
+
+
+# ── INSTAGRAM OAUTH ───────────────────────────────────────
+IG_APP_ID     = os.getenv("IG_APP_ID", "474990059818223")
+IG_APP_SECRET = os.getenv("IG_APP_SECRET", "")
+IG_REDIRECT   = "https://autopostleey-api-production.up.railway.app/instagram/callback"
+
+@app.get("/instagram/auth")
+async def instagram_auth(user_id: str = ""):
+    """Redirect user to Instagram OAuth via Facebook"""
+    import urllib.parse
+    params = {
+        "client_id":     IG_APP_ID,
+        "redirect_uri":  IG_REDIRECT,
+        "scope":         "instagram_basic,instagram_content_publish,pages_read_engagement",
+        "state":         user_id,
+        "response_type": "code",
+    }
+    url = "https://www.facebook.com/dialog/oauth?" + urllib.parse.urlencode(params)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
+
+
+@app.get("/instagram/callback")
+async def instagram_callback(code: str = "", state: str = "", error: str = ""):
+    """Handle Instagram OAuth callback"""
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+
+    if error:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?ig_error=cancelled")
+    if not code:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?ig_error=no_code")
+
+    user_id = state
+
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://graph.facebook.com/v21.0/oauth/access_token",
+                params={
+                    "client_id":     IG_APP_ID,
+                    "client_secret": IG_APP_SECRET,
+                    "redirect_uri":  IG_REDIRECT,
+                    "code":          code,
+                }
+            )
+            token_data = r.json()
+
+        if "error" in token_data:
+            return RedirectResponse("https://autopostleey.com/dashboard.html?ig_error=token_failed")
+
+        user_token = token_data.get("access_token")
+
+        # Get Instagram Business Account
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            # First get Facebook pages
+            r = await client.get(
+                "https://graph.facebook.com/v21.0/me/accounts",
+                params={"access_token": user_token}
+            )
+            pages = r.json().get("data", [])
+
+        ig_id   = None
+        ig_name = None
+        ig_token = user_token
+
+        for page in pages:
+            page_token = page.get("access_token")
+            page_id    = page.get("id")
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"https://graph.facebook.com/v21.0/{page_id}",
+                    params={"fields": "instagram_business_account", "access_token": page_token}
+                )
+                ig_data = r.json()
+            if ig_data.get("instagram_business_account"):
+                ig_id    = ig_data["instagram_business_account"]["id"]
+                ig_name  = page.get("name", "Instagram")
+                ig_token = page_token
+                break
+
+        if not ig_id:
+            return RedirectResponse("https://autopostleey.com/dashboard.html?ig_error=no_instagram")
+
+        # Save connection
+        if SUPABASE_URL and user_id:
+            conn_data = {
+                "user_id":      user_id,
+                "platform":     "instagram",
+                "access_token": ig_token,
+                "page_id":      ig_id,
+                "page_name":    ig_name,
+                "connected_at": datetime.utcnow().isoformat(),
+            }
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    params={"user_id": f"eq.{user_id}", "platform": "eq.instagram"},
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                )
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                    json=conn_data
+                )
+
+        params = urllib.parse.urlencode({"ig_success": "1", "page_name": ig_name})
+        return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
+
+    except Exception as e:
+        print(f"Instagram OAuth error: {e}")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?ig_error=server_error")
+
+
+async def publish_to_facebook(content: str, access_token: str, page_id: str) -> dict:
+    """Publish to Facebook Page"""
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"https://graph.facebook.com/v21.0/{page_id}/feed",
+                data={"message": content, "access_token": access_token}
+            )
+            data = r.json()
+            if "id" in data:
+                return {"success": True, "platform": "facebook", "post_id": data["id"]}
+            return {"success": False, "platform": "facebook", "error": data.get("error", {}).get("message", "Post failed")}
+    except Exception as e:
+        return {"success": False, "platform": "facebook", "error": str(e)}
+
+
+async def publish_to_instagram(content: str, access_token: str, ig_user_id: str, image_url: str = "") -> dict:
+    """Publish to Instagram Business Account"""
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            if image_url:
+                # Photo post
+                r = await client.post(
+                    f"https://graph.facebook.com/v21.0/{ig_user_id}/media",
+                    data={"image_url": image_url, "caption": content, "access_token": access_token}
+                )
+            else:
+                # Text/carousel - use text overlay on blank image not supported
+                # Use a simple approach with just caption
+                r = await client.post(
+                    f"https://graph.facebook.com/v21.0/{ig_user_id}/media",
+                    data={"media_type": "REELS", "caption": content, "access_token": access_token}
+                )
+            container = r.json()
+            if "error" in container:
+                return {"success": False, "platform": "instagram", "error": container["error"].get("message", "Container failed")}
+
+            container_id = container.get("id")
+            if not container_id:
+                return {"success": False, "platform": "instagram", "error": "No container ID"}
+
+            # Publish the container
+            r2 = await client.post(
+                f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish",
+                data={"creation_id": container_id, "access_token": access_token}
+            )
+            data2 = r2.json()
+            if "id" in data2:
+                return {"success": True, "platform": "instagram", "post_id": data2["id"]}
+            return {"success": False, "platform": "instagram", "error": data2.get("error", {}).get("message", "Publish failed")}
+    except Exception as e:
+        return {"success": False, "platform": "instagram", "error": str(e)}
