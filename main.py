@@ -415,6 +415,21 @@ async def publish_post(req: PublishRequest, user: dict = Depends(get_current_use
             else:
                 result = {"success": False, "platform": "google_business", "error": "Not connected"}
 
+        elif platform == "linkedin":
+            token     = conn.get("access_token", "")
+            author_id = conn.get("page_id", "")
+            if token and author_id:
+                result = await publish_to_linkedin(req.content, token, author_id)
+            else:
+                result = {"success": False, "platform": "linkedin", "error": "Not connected"}
+
+        elif platform == "twitter":
+            token = conn.get("access_token", "")
+            if token:
+                result = await publish_to_twitter(req.content, token)
+            else:
+                result = {"success": False, "platform": "twitter", "error": "Not connected"}
+
         else:
             result = {"success": False, "platform": platform, "error": "Platform coming soon"}
 
@@ -1004,3 +1019,278 @@ def post_failed_email(user_email: str, platform: str, content: str, error: str) 
     </body>
     </html>
     """
+
+
+# ── LINKEDIN OAUTH ────────────────────────────────────────
+LI_CLIENT_ID     = os.getenv("LINKEDIN_CLIENT_ID", "86r6hi7gg40xxm")
+LI_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET", "")
+LI_REDIRECT      = "https://autopostleey-api-production.up.railway.app/linkedin/callback"
+
+@app.get("/linkedin/auth")
+async def linkedin_auth(user_id: str = ""):
+    """Redirect user to LinkedIn OAuth"""
+    import urllib.parse
+    params = {
+        "response_type": "code",
+        "client_id":     LI_CLIENT_ID,
+        "redirect_uri":  LI_REDIRECT,
+        "state":         user_id,
+        "scope":         "openid profile email w_member_social",
+    }
+    url = "https://www.linkedin.com/oauth/v2/authorization?" + urllib.parse.urlencode(params)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
+
+
+@app.get("/linkedin/callback")
+async def linkedin_callback(code: str = "", state: str = "", error: str = ""):
+    """Handle LinkedIn OAuth callback"""
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+
+    if error:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?li_error=cancelled")
+    if not code:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?li_error=no_code")
+
+    user_id = state
+
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            # Exchange code for access token
+            r = await client.post(
+                "https://www.linkedin.com/oauth/v2/accessToken",
+                data={
+                    "grant_type":    "authorization_code",
+                    "code":          code,
+                    "redirect_uri":  LI_REDIRECT,
+                    "client_id":     LI_CLIENT_ID,
+                    "client_secret": LI_CLIENT_SECRET,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            token_data = r.json()
+
+        if "error" in token_data:
+            return RedirectResponse("https://autopostleey.com/dashboard.html?li_error=token_failed")
+
+        access_token = token_data.get("access_token")
+
+        # Get user profile
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://api.linkedin.com/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            profile = r.json()
+
+        page_name = profile.get("name", "LinkedIn User")
+        page_id   = profile.get("sub", "")
+
+        # Save connection
+        if SUPABASE_URL and user_id:
+            conn_data = {
+                "user_id":      user_id,
+                "platform":     "linkedin",
+                "access_token": access_token,
+                "page_id":      page_id,
+                "page_name":    page_name,
+                "connected_at": datetime.utcnow().isoformat(),
+            }
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                # Delete existing then insert
+                await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    params={"user_id": f"eq.{user_id}", "platform": "eq.linkedin"},
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                )
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                    json=conn_data
+                )
+
+        params = urllib.parse.urlencode({"li_success": "1", "page_name": page_name})
+        return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
+
+    except Exception as e:
+        print(f"LinkedIn OAuth error: {e}")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?li_error=server_error")
+
+
+async def publish_to_linkedin(content: str, access_token: str, author_id: str) -> dict:
+    """Publish a post to LinkedIn"""
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                "https://api.linkedin.com/v2/ugcPosts",
+                headers={
+                    "Authorization":  f"Bearer {access_token}",
+                    "Content-Type":   "application/json",
+                    "X-Restli-Protocol-Version": "2.0.0"
+                },
+                json={
+                    "author":          f"urn:li:person:{author_id}",
+                    "lifecycleState":  "PUBLISHED",
+                    "specificContent": {
+                        "com.linkedin.ugc.ShareContent": {
+                            "shareCommentary": {"text": content},
+                            "shareMediaCategory": "NONE"
+                        }
+                    },
+                    "visibility": {
+                        "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+                    }
+                }
+            )
+            if r.status_code in (200, 201):
+                data = r.json()
+                return {"success": True, "platform": "linkedin", "post_id": data.get("id", "")}
+            return {"success": False, "platform": "linkedin", "error": f"HTTP {r.status_code}: {r.text[:200]}"}
+    except Exception as e:
+        return {"success": False, "platform": "linkedin", "error": str(e)}
+
+
+# ── TWITTER/X OAUTH ───────────────────────────────────────
+import hashlib, base64, secrets
+
+TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "M1hwSy1VcVdQNV9lMzBwYUo1Xzc6MTpjaQ")
+TW_CLIENT_SECRET = os.getenv("TWITTER_CLIENT_SECRET", "")
+TW_REDIRECT      = "https://autopostleey-api-production.up.railway.app/twitter/callback"
+
+# Store code verifiers temporarily (in production use Redis/DB)
+_tw_verifiers = {}
+
+@app.get("/twitter/auth")
+async def twitter_auth(user_id: str = ""):
+    """Redirect user to Twitter/X OAuth 2.0"""
+    import urllib.parse
+
+    # Generate PKCE code verifier and challenge
+    code_verifier  = secrets.token_urlsafe(32)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b'=').decode()
+
+    state = f"{user_id}:{secrets.token_urlsafe(8)}"
+    _tw_verifiers[state] = code_verifier
+
+    params = {
+        "response_type":         "code",
+        "client_id":             TW_CLIENT_ID,
+        "redirect_uri":          TW_REDIRECT,
+        "scope":                 "tweet.read tweet.write users.read offline.access",
+        "state":                 state,
+        "code_challenge":        code_challenge,
+        "code_challenge_method": "S256",
+    }
+    url = "https://twitter.com/i/oauth2/authorize?" + urllib.parse.urlencode(params)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
+
+
+@app.get("/twitter/callback")
+async def twitter_callback(code: str = "", state: str = "", error: str = ""):
+    """Handle Twitter/X OAuth callback"""
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+
+    if error:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=cancelled")
+    if not code or not state:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=no_code")
+
+    user_id      = state.split(":")[0]
+    code_verifier = _tw_verifiers.pop(state, None)
+
+    if not code_verifier:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=invalid_state")
+
+    try:
+        # Exchange code for token
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                "https://api.twitter.com/2/oauth2/token",
+                data={
+                    "grant_type":    "authorization_code",
+                    "code":          code,
+                    "redirect_uri":  TW_REDIRECT,
+                    "code_verifier": code_verifier,
+                    "client_id":     TW_CLIENT_ID,
+                },
+                auth=(TW_CLIENT_ID, TW_CLIENT_SECRET),
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            token_data = r.json()
+
+        if "error" in token_data:
+            print(f"Twitter token error: {token_data}")
+            return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=token_failed")
+
+        access_token  = token_data.get("access_token")
+        refresh_token = token_data.get("refresh_token", "")
+
+        # Get user profile
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://api.twitter.com/2/users/me",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            profile = r.json()
+
+        tw_user    = profile.get("data", {})
+        page_name  = tw_user.get("username", "twitter_user")
+        page_id    = tw_user.get("id", "")
+        name       = tw_user.get("name", page_name)
+
+        # Save connection
+        if SUPABASE_URL and user_id:
+            conn_data = {
+                "user_id":      user_id,
+                "platform":     "twitter",
+                "access_token": access_token,
+                "page_id":      page_id,
+                "page_name":    f"@{page_name}",
+                "webhook_url":  refresh_token,
+                "connected_at": datetime.utcnow().isoformat(),
+            }
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    params={"user_id": f"eq.{user_id}", "platform": "eq.twitter"},
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                )
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                    json=conn_data
+                )
+
+        params = urllib.parse.urlencode({"tw_success": "1", "page_name": f"@{page_name}"})
+        return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
+
+    except Exception as e:
+        print(f"Twitter OAuth error: {e}")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=server_error")
+
+
+async def publish_to_twitter(content: str, access_token: str) -> dict:
+    """Publish a tweet via Twitter API v2"""
+    try:
+        # Twitter 280 char limit
+        tweet_text = content[:280]
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                "https://api.twitter.com/2/tweets",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type":  "application/json"
+                },
+                json={"text": tweet_text}
+            )
+            if r.status_code in (200, 201):
+                data = r.json()
+                return {"success": True, "platform": "twitter", "post_id": data.get("data", {}).get("id", "")}
+            return {"success": False, "platform": "twitter", "error": f"HTTP {r.status_code}: {r.text[:200]}"}
+    except Exception as e:
+        return {"success": False, "platform": "twitter", "error": str(e)}
