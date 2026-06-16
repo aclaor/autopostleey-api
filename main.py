@@ -427,6 +427,27 @@ async def publish_post(req: PublishRequest, user: dict = Depends(get_current_use
     errors = [r.get("error") for r in results if not r["success"]]
     await update_post_status(req.post_id, final_status, "; ".join(filter(None, errors)))
 
+    # Send email notifications
+    user_email = user.get("email", "")
+    if user_email and user_email != "guest":
+        for result in results:
+            platform = result.get("platform", "")
+            if result.get("success"):
+                html = post_success_email(user_email, platform, req.content)
+                await send_email(
+                    user_email,
+                    f"✅ Your post is live on {platform.capitalize()}!",
+                    html
+                )
+            else:
+                error = result.get("error", "Unknown error")
+                html = post_failed_email(user_email, platform, req.content, error)
+                await send_email(
+                    user_email,
+                    f"⚠️ Post failed on {platform.capitalize()}",
+                    html
+                )
+
     return {
         "status":  final_status,
         "success": success,
@@ -852,3 +873,134 @@ async def publish_to_google_business(content: str, image_url: str, access_token:
             return {"success": False, "platform": "google_business", "error": data.get("error", {}).get("message", "Post failed")}
     except Exception as e:
         return {"success": False, "platform": "google_business", "error": str(e)}
+
+
+# ── EMAIL NOTIFICATIONS ───────────────────────────────────
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+FROM_EMAIL     = os.getenv("FROM_EMAIL", "notifications@autopostleey.com")
+
+async def send_email(to: str, subject: str, html: str):
+    """Send email via Resend"""
+    if not RESEND_API_KEY:
+        print(f"No RESEND_API_KEY — skipping email to {to}")
+        return False
+    try:
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type":  "application/json"
+                },
+                json={
+                    "from":    f"Autopostleey <{FROM_EMAIL}>",
+                    "to":      [to],
+                    "subject": subject,
+                    "html":    html
+                }
+            )
+            print(f"Email sent to {to}: {r.status_code}")
+            return r.status_code in (200, 201)
+    except Exception as e:
+        print(f"Email error: {e}")
+        return False
+
+
+def post_success_email(user_email: str, platform: str, content: str, post_url: str = "") -> str:
+    """Generate success email HTML"""
+    platform_colors = {
+        "bluesky":  "#0085ff",
+        "discord":  "#5865f2",
+        "telegram": "#26a5e4",
+        "facebook": "#1877f2",
+        "instagram":"#e1306c",
+        "linkedin": "#0077b5",
+        "twitter":  "#1da1f2",
+    }
+    color = platform_colors.get(platform, "#7c3aed")
+    preview = content[:100] + "..." if len(content) > 100 else content
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0;padding:0;background:#f4f4f5;font-family:Inter,sans-serif;">
+      <div style="max-width:600px;margin:40px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+        <!-- Header -->
+        <div style="background:linear-gradient(135deg,#7c3aed,#a855f7);padding:32px;text-align:center;">
+          <div style="font-family:monospace;font-size:20px;font-weight:700;color:#fff;">auto<span style="color:#c084fc;">postleey</span></div>
+          <div style="color:rgba(255,255,255,0.8);margin-top:8px;font-size:14px;">Your post is live! 🎉</div>
+        </div>
+
+        <!-- Content -->
+        <div style="padding:32px;">
+          <div style="display:inline-block;background:{color}20;border:1px solid {color}40;border-radius:20px;padding:4px 14px;font-size:13px;color:{color};font-weight:600;margin-bottom:20px;">
+            ✓ Posted to {platform.capitalize()}
+          </div>
+
+          <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 16px;">Your post went live!</h2>
+
+          <div style="background:#f8f8f8;border-left:3px solid {color};border-radius:4px;padding:16px;margin-bottom:24px;">
+            <p style="color:#444;font-size:14px;line-height:1.6;margin:0;">{preview}</p>
+          </div>
+
+          {'<a href="'+post_url+'" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px;margin-bottom:24px;">View Post →</a>' if post_url else ''}
+
+          <p style="color:#666;font-size:14px;line-height:1.6;">
+            Your content is reaching your audience right now.
+            Keep the momentum going — schedule your next post from your dashboard.
+          </p>
+
+          <a href="https://autopostleey.com/dashboard.html" style="display:inline-block;background:#f4f4f5;color:#333;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;">
+            Go to Dashboard →
+          </a>
+        </div>
+
+        <!-- Footer -->
+        <div style="padding:20px 32px;border-top:1px solid #eee;text-align:center;">
+          <p style="color:#999;font-size:12px;margin:0;">
+            You received this because you have posts scheduled on Autopostleey.<br>
+            <a href="https://autopostleey.com" style="color:#7c3aed;">autopostleey.com</a>
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+
+
+def post_failed_email(user_email: str, platform: str, content: str, error: str) -> str:
+    """Generate failure email HTML"""
+    preview = content[:100] + "..." if len(content) > 100 else content
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0;padding:0;background:#f4f4f5;font-family:Inter,sans-serif;">
+      <div style="max-width:600px;margin:40px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <div style="background:linear-gradient(135deg,#7c3aed,#a855f7);padding:32px;text-align:center;">
+          <div style="font-family:monospace;font-size:20px;font-weight:700;color:#fff;">auto<span style="color:#c084fc;">postleey</span></div>
+          <div style="color:rgba(255,255,255,0.8);margin-top:8px;font-size:14px;">Post failed ⚠️</div>
+        </div>
+        <div style="padding:32px;">
+          <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 16px;">Your post to {platform.capitalize()} failed</h2>
+          <div style="background:#fff5f5;border-left:3px solid #ef4444;border-radius:4px;padding:16px;margin-bottom:20px;">
+            <p style="color:#666;font-size:13px;margin:0 0 8px;"><strong>Error:</strong> {error}</p>
+            <p style="color:#444;font-size:14px;margin:0;">{preview}</p>
+          </div>
+          <p style="color:#666;font-size:14px;">Common fixes:</p>
+          <ul style="color:#666;font-size:14px;line-height:1.8;">
+            <li>Check your platform connection is still active</li>
+            <li>Make sure your access token hasn't expired</li>
+            <li>Verify your account has posting permissions</li>
+          </ul>
+          <a href="https://autopostleey.com/dashboard.html" style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px;">
+            Fix Connection →
+          </a>
+        </div>
+        <div style="padding:20px 32px;border-top:1px solid #eee;text-align:center;">
+          <p style="color:#999;font-size:12px;margin:0;"><a href="https://autopostleey.com" style="color:#7c3aed;">autopostleey.com</a></p>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
