@@ -646,7 +646,7 @@ async def facebook_data_deletion_get():
 # ── FACEBOOK OAUTH ────────────────────────────────────────
 FB_APP_ID     = os.getenv("FB_APP_ID", "2167420754104440")
 FB_APP_SECRET = os.getenv("FB_APP_SECRET", "")
-FB_REDIRECT   = "https://autopostleey-api-production.up.railway.app/facebook/callback"
+FB_REDIRECT   = "https://autopostleey.com/facebook-callback.html"
 
 @app.get("/facebook/auth")
 async def facebook_auth(user_id: str = ""):
@@ -1315,7 +1315,7 @@ async def publish_to_twitter(content: str, access_token: str) -> dict:
 # ── FACEBOOK OAUTH ────────────────────────────────────────
 FB_APP_ID     = os.getenv("FB_APP_ID", "474990059818223")
 FB_APP_SECRET = os.getenv("FB_APP_SECRET", "")
-FB_REDIRECT   = "https://autopostleey-api-production.up.railway.app/facebook/callback"
+FB_REDIRECT   = "https://autopostleey.com/facebook-callback.html"
 
 @app.get("/facebook/auth")
 async def facebook_auth(user_id: str = ""):
@@ -1427,7 +1427,7 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
 # ── INSTAGRAM OAUTH ───────────────────────────────────────
 IG_APP_ID     = os.getenv("IG_APP_ID", "474990059818223")
 IG_APP_SECRET = os.getenv("IG_APP_SECRET", "")
-IG_REDIRECT   = "https://autopostleey-api-production.up.railway.app/instagram/callback"
+IG_REDIRECT   = "https://autopostleey.com/instagram-callback.html"
 
 @app.get("/instagram/auth")
 async def instagram_auth(user_id: str = ""):
