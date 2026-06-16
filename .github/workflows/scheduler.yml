@@ -1,0 +1,35 @@
+name: 📅 Auto Post Scheduler
+
+on:
+  schedule:
+    # Runs every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (check without posting)'
+        required: false
+        default: 'false'
+
+jobs:
+  schedule:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install httpx python-dotenv
+
+      - name: Run scheduler
+        env:
+          SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          CF_WORKER_URL:     ${{ secrets.CF_WORKER_URL }}
+          API_TOKEN:         ${{ secrets.AUTOPOSTLEEY_API_TOKEN }}
+          DRY_RUN:           ${{ github.event.inputs.dry_run }}
+        run: python scheduler.py
