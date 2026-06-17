@@ -1797,3 +1797,96 @@ async def publish_to_instagram(content: str, access_token: str, ig_user_id: str,
             return {"success": False, "platform": "instagram", "error": data2.get("error", {}).get("message", "Publish failed")}
     except Exception as e:
         return {"success": False, "platform": "instagram", "error": str(e)}
+
+
+# ── TWITTER/X OAUTH 2.0 ───────────────────────────────────
+import hashlib as _hashlib, secrets as _secrets
+
+TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "M1hwSy1VcVdQNV9lMzBwYUo1Xzc6MTpjaQ")
+TW_CLIENT_SECRET = os.getenv("TWITTER_CLIENT_SECRET", "")
+TW_REDIRECT      = "https://autopostleey.com/twitter-callback.html"
+
+_tw_verifiers = {}
+
+@app.get("/twitter/auth")
+async def twitter_auth(user_id: str = ""):
+    import urllib.parse
+    code_verifier  = _secrets.token_urlsafe(32)
+    code_challenge = base64.b64encode(
+        _hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    state = f"{user_id}:{_secrets.token_urlsafe(8)}"
+    _tw_verifiers[state] = code_verifier
+    params = {
+        "response_type":         "code",
+        "client_id":             TW_CLIENT_ID,
+        "redirect_uri":          TW_REDIRECT,
+        "scope":                 "tweet.write users.read offline.access",
+        "state":                 state,
+        "code_challenge":        code_challenge,
+        "code_challenge_method": "S256",
+    }
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("https://twitter.com/i/oauth2/authorize?" + urllib.parse.urlencode(params))
+
+
+@app.get("/twitter/callback")
+async def twitter_callback(code: str = "", state: str = "", error: str = ""):
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+    if error or not code:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=cancelled")
+    user_id       = state.split(":")[0]
+    code_verifier = _tw_verifiers.pop(state, None)
+    if not code_verifier:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=invalid_state")
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                "https://api.twitter.com/2/oauth2/token",
+                data={
+                    "grant_type":    "authorization_code",
+                    "code":          code,
+                    "redirect_uri":  TW_REDIRECT,
+                    "code_verifier": code_verifier,
+                    "client_id":     TW_CLIENT_ID,
+                },
+                auth=(TW_CLIENT_ID, TW_CLIENT_SECRET),
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            token_data = r.json()
+        if "error" in token_data:
+            print(f"Twitter token error: {token_data}")
+            return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=token_failed")
+        access_token = token_data.get("access_token")
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                "https://api.twitter.com/2/users/me",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            profile = r.json()
+        tw_user   = profile.get("data", {})
+        page_name = f"@{tw_user.get('username', 'twitter_user')}"
+        page_id   = tw_user.get("id", "")
+        if SUPABASE_URL and user_id:
+            conn_data = {
+                "user_id": user_id, "platform": "twitter",
+                "access_token": access_token, "page_id": page_id,
+                "page_name": page_name, "connected_at": datetime.utcnow().isoformat(),
+            }
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    params={"user_id": f"eq.{user_id}", "platform": "eq.twitter"},
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                )
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                    json=conn_data
+                )
+        params = urllib.parse.urlencode({"tw_success": "1", "page_name": page_name})
+        return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
+    except Exception as e:
+        print(f"Twitter OAuth error: {e}")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=server_error")
