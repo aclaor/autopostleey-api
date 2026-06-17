@@ -1573,16 +1573,27 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
             return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=token_failed")
 
         user_token = token_data.get("access_token")
+        print(f"Got user token: {user_token[:20] if user_token else 'None'}...")
+        
+        # Check token permissions
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            perm_r = await client.get(
+                "https://graph.facebook.com/v21.0/me/permissions",
+                params={"access_token": user_token}
+            )
+            print(f"Token permissions: {perm_r.json()}")
 
         # Get pages the user manages
         async with _httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(
                 "https://graph.facebook.com/v21.0/me/accounts",
-                params={"access_token": user_token}
+                params={"access_token": user_token, "fields": "id,name,access_token,category"}
             )
             pages_data = r.json()
 
+        print(f"Facebook pages response: {pages_data}")
         pages = pages_data.get("data", [])
+        print(f"Pages found: {len(pages)}")
 
         if not pages:
             # No pages found — save user token instead
