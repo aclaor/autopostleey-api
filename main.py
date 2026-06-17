@@ -1901,3 +1901,158 @@ async def twitter_callback(code: str = "", state: str = "", error: str = ""):
     except Exception as e:
         print(f"Twitter OAuth error: {e}")
         return RedirectResponse("https://autopostleey.com/dashboard.html?tw_error=server_error")
+
+
+# ── TELEGRAM BOT AUTO-CONNECT ─────────────────────────────
+TG_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Handle Telegram bot webhook for auto-connect"""
+    try:
+        body = await request.json()
+        message = body.get("message", {})
+        text    = message.get("text", "")
+        chat    = message.get("chat", {})
+        chat_id = str(chat.get("id", ""))
+        chat_type = chat.get("type", "")
+        
+        # Handle /start command with user_id
+        if text.startswith("/start connect_"):
+            user_id = text.replace("/start connect_", "").strip()
+            
+            # Save connection to Supabase
+            if user_id and SUPABASE_URL:
+                conn_data = {
+                    "user_id":      user_id,
+                    "platform":     "telegram",
+                    "bot_token":    TG_BOT_TOKEN,
+                    "chat_id":      chat_id,
+                    "page_name":    chat.get("title") or chat.get("first_name", "Telegram"),
+                    "connected_at": datetime.utcnow().isoformat(),
+                }
+                async with _httpx.AsyncClient(timeout=10.0) as client:
+                    await client.delete(
+                        f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                        params={"user_id": f"eq.{user_id}", "platform": "eq.telegram"},
+                        headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                    )
+                    await client.post(
+                        f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                        headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                        json=conn_data
+                    )
+            
+            # Send success message to user
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": "✅ Connected to Autopostleey!\n\nYour posts will be published here automatically. Go back to your dashboard to start scheduling posts! 🚀",
+                        "parse_mode": "HTML"
+                    }
+                )
+        
+        return {"ok": True}
+    except Exception as e:
+        print(f"Telegram webhook error: {e}")
+        return {"ok": False}
+
+
+@app.get("/telegram/setup-webhook")
+async def setup_telegram_webhook():
+    """Set up Telegram webhook - call this once after deployment"""
+    webhook_url = "https://autopostleey-api-production.up.railway.app/telegram/webhook"
+    async with _httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.post(
+            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/setWebhook",
+            json={"url": webhook_url}
+        )
+        return r.json()
+
+
+# ── DISCORD OAUTH ─────────────────────────────────────────
+DC_CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "1516692416986484837")
+DC_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
+DC_REDIRECT      = "https://autopostleey.com/discord-callback.html"
+
+@app.get("/discord/auth")
+async def discord_auth(user_id: str = ""):
+    """Redirect to Discord OAuth"""
+    import urllib.parse
+    params = {
+        "client_id":     DC_CLIENT_ID,
+        "redirect_uri":  DC_REDIRECT,
+        "response_type": "code",
+        "scope":         "webhook.incoming",
+        "state":         user_id,
+    }
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("https://discord.com/api/oauth2/authorize?" + urllib.parse.urlencode(params))
+
+
+@app.get("/discord/callback")
+async def discord_callback(code: str = "", state: str = "", error: str = ""):
+    """Handle Discord OAuth callback"""
+    from fastapi.responses import RedirectResponse
+    import urllib.parse
+
+    if error or not code:
+        return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=cancelled")
+
+    user_id = state
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                "https://discord.com/api/oauth2/token",
+                data={
+                    "client_id":     DC_CLIENT_ID,
+                    "client_secret": DC_CLIENT_SECRET,
+                    "grant_type":    "authorization_code",
+                    "code":          code,
+                    "redirect_uri":  DC_REDIRECT,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            data = r.json()
+
+        if "error" in data:
+            return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=token_failed")
+
+        # Discord returns webhook info directly
+        webhook = data.get("webhook", {})
+        webhook_url  = webhook.get("url", "")
+        channel_name = webhook.get("channel_id", "discord")
+        guild_name   = webhook.get("guild", {}).get("name", "Discord Server")
+
+        if not webhook_url:
+            return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=no_webhook")
+
+        # Save connection
+        if SUPABASE_URL and user_id:
+            conn_data = {
+                "user_id":     user_id,
+                "platform":    "discord",
+                "webhook_url": webhook_url,
+                "page_name":   guild_name,
+                "connected_at": datetime.utcnow().isoformat(),
+            }
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                await client.delete(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    params={"user_id": f"eq.{user_id}", "platform": "eq.discord"},
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                )
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
+                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                    json=conn_data
+                )
+
+        params = urllib.parse.urlencode({"dc_success": "1", "page_name": guild_name})
+        return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
+
+    except Exception as e:
+        print(f"Discord OAuth error: {e}")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=server_error")
