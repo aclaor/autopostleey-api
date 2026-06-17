@@ -1170,7 +1170,7 @@ async def publish_to_linkedin(content: str, access_token: str, author_id: str) -
 # ── TWITTER/X OAUTH ───────────────────────────────────────
 import hashlib, base64, secrets
 
-TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "M1hwSy1VcVdQNV9lMzBwYUo1Xzc6MTpjaQ")
+TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "RkNaY2lINkJPODdoYW5kU3cyQmM6MTpjaQ")
 TW_CLIENT_SECRET = os.getenv("TWITTER_CLIENT_SECRET", "")
 TW_REDIRECT      = "https://autopostleey-api-production.up.railway.app/twitter/callback"
 
@@ -1378,7 +1378,7 @@ async def publish_to_linkedin(content: str, access_token: str, author_id: str) -
 # ── TWITTER/X OAUTH ───────────────────────────────────────
 import hashlib, base64, secrets
 
-TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "M1hwSy1VcVdQNV9lMzBwYUo1Xzc6MTpjaQ")
+TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "RkNaY2lINkJPODdoYW5kU3cyQmM6MTpjaQ")
 TW_CLIENT_SECRET = os.getenv("TWITTER_CLIENT_SECRET", "")
 TW_REDIRECT      = "https://autopostleey-api-production.up.railway.app/twitter/callback"
 
@@ -1802,7 +1802,7 @@ async def publish_to_instagram(content: str, access_token: str, ig_user_id: str,
 # ── TWITTER/X OAUTH 2.0 ───────────────────────────────────
 import hashlib as _hashlib, secrets as _secrets
 
-TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "M1hwSy1VcVdQNV9lMzBwYUo1Xzc6MTpjaQ")
+TW_CLIENT_ID     = os.getenv("TWITTER_CLIENT_ID", "RkNaY2lINkJPODdoYW5kU3cyQmM6MTpjaQ")
 TW_CLIENT_SECRET = os.getenv("TWITTER_CLIENT_SECRET", "")
 TW_REDIRECT      = "https://autopostleey.com/twitter-callback.html"
 
