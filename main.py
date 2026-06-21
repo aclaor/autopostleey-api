@@ -2003,8 +2003,15 @@ async def discord_callback(code: str = "", state: str = "", error: str = ""):
     from fastapi.responses import RedirectResponse
     import urllib.parse
 
-    if error or not code:
+    print(f"Discord callback received: code={bool(code)}, state={bool(state)}, error={error!r}")
+
+    if error:
+        print(f"Discord error param: {error}")
         return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=cancelled")
+
+    if not code:
+        print("Discord: no code received")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=no_code")
 
     user_id = state
     try:
