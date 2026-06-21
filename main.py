@@ -2035,29 +2035,34 @@ async def discord_callback(code: str = "", state: str = "", error: str = ""):
             return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=no_webhook")
 
         # Save connection
+        print(f"Saving Discord connection for user {user_id}, guild: {guild_name}, webhook: {bool(webhook_url)}")
         if SUPABASE_URL and user_id:
             conn_data = {
-                "user_id":     user_id,
-                "platform":    "discord",
-                "webhook_url": webhook_url,
-                "page_name":   guild_name,
+                "user_id":      user_id,
+                "platform":     "discord",
+                "access_token": webhook_url,  # store webhook_url in access_token column
+                "page_name":    guild_name,
                 "connected_at": datetime.utcnow().isoformat(),
             }
             async with _httpx.AsyncClient(timeout=10.0) as client:
+                # Delete existing then insert fresh
                 await client.delete(
                     f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
                     params={"user_id": f"eq.{user_id}", "platform": "eq.discord"},
-                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}"}
+                    headers={"apikey": SUPABASE_SERVICE or SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_SERVICE or SUPABASE_ANON}"}
                 )
-                await client.post(
+                save_resp = await client.post(
                     f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
-                    headers={"apikey": SUPABASE_SERVICE, "Authorization": f"Bearer {SUPABASE_SERVICE}", "Content-Type": "application/json"},
+                    headers={"apikey": SUPABASE_SERVICE or SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_SERVICE or SUPABASE_ANON}", "Content-Type": "application/json"},
                     json=conn_data
                 )
+                print(f"Discord save status: {save_resp.status_code}, body: {save_resp.text[:200]}")
 
         params = urllib.parse.urlencode({"dc_success": "1", "page_name": guild_name})
         return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
 
     except Exception as e:
         print(f"Discord OAuth error: {e}")
+        import traceback
+        traceback.print_exc()
         return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=server_error")
