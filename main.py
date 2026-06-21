@@ -2015,6 +2015,7 @@ async def discord_callback(code: str = "", state: str = "", error: str = ""):
 
     user_id = state
     try:
+        print(f"Discord token exchange: client_id={DC_CLIENT_ID}, redirect={DC_REDIRECT}, secret_set={bool(DC_CLIENT_SECRET)}")
         async with _httpx.AsyncClient(timeout=15.0) as client:
             r = await client.post(
                 "https://discord.com/api/oauth2/token",
@@ -2027,9 +2028,13 @@ async def discord_callback(code: str = "", state: str = "", error: str = ""):
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
+            print(f"Discord token status: {r.status_code}, body: {r.text[:300]}")
+            if not r.text.strip():
+                return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=empty_response")
             data = r.json()
 
         if "error" in data:
+            print(f"Discord token error: {data}")
             return RedirectResponse("https://autopostleey.com/dashboard.html?dc_error=token_failed")
 
         # Discord returns webhook info directly
