@@ -269,10 +269,21 @@ async def publish_to_telegram(content: str, image_url: str, bot_token: str, chat
     try:
         async with _httpx.AsyncClient(timeout=15.0) as client:
             if image_url:
+                print(f"Telegram sendPhoto: chat_id={chat_id}, photo={image_url[:80]}")
                 r = await client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendPhoto",
                     json={"chat_id": chat_id, "photo": image_url, "caption": content}
                 )
+                print(f"Telegram sendPhoto response: {r.status_code} {r.text[:200]}")
+                # If sendPhoto fails, fall back to text only
+                data = r.json()
+                if not data.get("ok"):
+                    print(f"sendPhoto failed, falling back to text: {data}")
+                    r = await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": chat_id, "text": content + "\n\n🖼 " + image_url, "parse_mode": "HTML"}
+                    )
+                    data = r.json()
             else:
                 r = await client.post(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
