@@ -718,6 +718,7 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
         page_name  = page.get("name")
 
         # Save connection to Supabase
+        print(f"Saving Facebook connection for user {user_id}, page: {page_name}")
         if SUPABASE_URL and user_id:
             conn_data = {
                 "user_id":      user_id,
@@ -728,7 +729,7 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
                 "connected_at": datetime.utcnow().isoformat(),
             }
             async with _httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(
+                save_resp = await client.post(
                     f"{SUPABASE_URL}/rest/v1/autopostleey_connections",
                     headers={
                         "apikey":        SUPABASE_ANON,
@@ -739,6 +740,9 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
                     params={"on_conflict": "user_id,platform"},
                     json=conn_data
                 )
+                print(f"Supabase save status: {save_resp.status_code}, body: {save_resp.text[:200]}")
+        else:
+            print(f"Skipping save — SUPABASE_URL={bool(SUPABASE_URL)}, user_id={bool(user_id)}")
 
         # Redirect back to dashboard with success
         params = urllib.parse.urlencode({
