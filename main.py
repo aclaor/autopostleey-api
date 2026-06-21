@@ -734,8 +734,9 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
                         "apikey":        SUPABASE_ANON,
                         "Authorization": f"Bearer {SUPABASE_ANON}",
                         "Content-Type":  "application/json",
-                        "Prefer":        "resolution=merge-duplicates"
+                        "Prefer":        "resolution=merge-duplicates,return=representation"
                     },
+                    params={"on_conflict": "user_id,platform"},
                     json=conn_data
                 )
 
