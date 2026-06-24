@@ -2101,7 +2101,8 @@ async def discord_callback(code: str = "", state: str = "", error: str = ""):
             conn_data = {
                 "user_id":      user_id,
                 "platform":     "discord",
-                "access_token": webhook_url,  # store webhook_url in access_token column
+                "access_token": webhook_url,  # keep for backwards compatibility
+                "webhook_url":  webhook_url,  # correct field for worker
                 "page_name":    guild_name,
                 "connected_at": datetime.utcnow().isoformat(),
             }
