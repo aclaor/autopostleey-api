@@ -125,8 +125,8 @@ async def create_paypal_order(
                     "description": description
                 }],
                 "application_context": {
-                    "return_url": "https://autopostleey.com/dashboard?payment=success",
-                    "cancel_url": "https://autopostleey.com/dashboard?payment=cancel",
+                    "return_url": "https://autopostleey.com/dashboard.html?payment=success",
+                    "cancel_url": "https://autopostleey.com/dashboard.html?payment=cancel",
                     "brand_name": "Autopostleey",
                     "user_action": "PAY_NOW"
                 }
@@ -682,10 +682,10 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
     import urllib.parse
 
     if error:
-        return RedirectResponse("https://autopostleey.com/dashboard?fb_error=cancelled")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=cancelled")
 
     if not code:
-        return RedirectResponse("https://autopostleey.com/dashboard?fb_error=no_code")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=no_code")
 
     user_id = state  # user_id passed via state param
 
@@ -705,7 +705,7 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
 
         if "error" in token_data:
             print(f"Token exchange error: {token_data}")
-            return RedirectResponse("https://autopostleey.com/dashboard?fb_error=token_failed")
+            return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=token_failed")
 
         user_token = token_data.get("access_token")
 
@@ -720,13 +720,16 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
         pages = pages_data.get("data", [])
 
         if not pages:
-            return RedirectResponse("https://autopostleey.com/dashboard?fb_error=no_pages")
+            return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=no_pages")
 
-        # Use first page (most users have one page)
-        page = pages[0]
+        # If user has multiple pages, save ALL and use the most recently created
+        # Sort by ID descending (higher ID = newer page)
+        pages_sorted = sorted(pages, key=lambda p: int(p.get('id', 0)), reverse=True)
+        page = pages_sorted[0]
         page_token = page.get("access_token")
         page_id    = page.get("id")
         page_name  = page.get("name")
+        print(f"Found {len(pages)} pages, using most recent: {page_name} ({page_id})")
 
         # Save connection to Supabase
         print(f"Saving Facebook connection for user {user_id}, page: {page_name}")
@@ -760,11 +763,11 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
             "fb_success": "1",
             "page_name":  page_name or "Your Page"
         })
-        return RedirectResponse(f"https://autopostleey.com/dashboard?{params}")
+        return RedirectResponse(f"https://autopostleey.com/dashboard.html?{params}")
 
     except Exception as e:
         print(f"OAuth callback error: {e}")
-        return RedirectResponse("https://autopostleey.com/dashboard?fb_error=server_error")
+        return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=server_error")
 
 
 @app.get("/facebook/pages")
@@ -1720,13 +1723,12 @@ async def instagram_callback(code: str = "", state: str = "", error: str = ""):
             )
             pages = r.json().get("data", [])
 
-        ig_id   = None
-        ig_name = None
-        ig_token = user_token
-
+        # Collect ALL Instagram accounts across all pages
+        ig_accounts = []
         for page in pages:
             page_token = page.get("access_token")
             page_id    = page.get("id")
+            page_name  = page.get("name", "")
             async with _httpx.AsyncClient(timeout=10.0) as client:
                 r = await client.get(
                     f"https://graph.facebook.com/v21.0/{page_id}",
@@ -1734,13 +1736,37 @@ async def instagram_callback(code: str = "", state: str = "", error: str = ""):
                 )
                 ig_data = r.json()
             if ig_data.get("instagram_business_account"):
-                ig_id    = ig_data["instagram_business_account"]["id"]
-                ig_name  = page.get("name", "Instagram")
-                ig_token = page_token
-                break
+                ig_id = ig_data["instagram_business_account"]["id"]
+                # Get Instagram username
+                async with _httpx.AsyncClient(timeout=10.0) as client:
+                    ig_info = await client.get(
+                        f"https://graph.facebook.com/v21.0/{ig_id}",
+                        params={"fields": "username,name", "access_token": page_token}
+                    )
+                    ig_info_data = ig_info.json()
+                ig_accounts.append({
+                    "ig_id":       ig_id,
+                    "ig_username":  ig_info_data.get("username", page_name),
+                    "ig_token":     page_token,
+                    "page_name":    page_name,
+                    "page_id":      page_id,
+                })
 
-        if not ig_id:
+        if not ig_accounts:
             return RedirectResponse("https://autopostleey.com/dashboard.html?ig_error=no_instagram")
+
+        # One account — save directly
+        # Multiple accounts — pass to dashboard for selection
+        if len(ig_accounts) == 1:
+            ig_id    = ig_accounts[0]["ig_id"]
+            ig_name  = ig_accounts[0]["ig_username"]
+            ig_token = ig_accounts[0]["ig_token"]
+        else:
+            import json as _json
+            accounts_json = urllib.parse.quote(_json.dumps(ig_accounts))
+            return RedirectResponse(
+                f"https://autopostleey.com/dashboard.html?ig_select={accounts_json}&user_id={user_id}"
+            )
 
         # Save connection
         if SUPABASE_URL and user_id:
