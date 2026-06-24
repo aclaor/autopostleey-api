@@ -722,14 +722,26 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
         if not pages:
             return RedirectResponse("https://autopostleey.com/dashboard.html?fb_error=no_pages")
 
-        # If user has multiple pages, save ALL and use the most recently created
-        # Sort by ID descending (higher ID = newer page)
-        pages_sorted = sorted(pages, key=lambda p: int(p.get('id', 0)), reverse=True)
-        page = pages_sorted[0]
+        # If multiple pages — let user choose which one
+        if len(pages) > 1:
+            import json as _json
+            pages_clean = [{
+                "id":           p.get("id"),
+                "name":         p.get("name"),
+                "access_token": p.get("access_token"),
+            } for p in pages]
+            pages_json = urllib.parse.quote(_json.dumps(pages_clean))
+            print(f"Found {len(pages)} pages — redirecting to page selector")
+            return RedirectResponse(
+                f"https://autopostleey.com/dashboard.html?fb_select={pages_json}&user_id={user_id}"
+            )
+
+        # Only one page — save directly
+        page       = pages[0]
         page_token = page.get("access_token")
         page_id    = page.get("id")
         page_name  = page.get("name")
-        print(f"Found {len(pages)} pages, using most recent: {page_name} ({page_id})")
+        print(f"Found 1 page, auto-connecting: {page_name} ({page_id})")
 
         # Save connection to Supabase
         print(f"Saving Facebook connection for user {user_id}, page: {page_name}")
