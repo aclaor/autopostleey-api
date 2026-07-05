@@ -655,8 +655,8 @@ async def facebook_data_deletion_get():
 
 
 # ── FACEBOOK OAUTH ────────────────────────────────────────
-FB_APP_ID     = os.getenv("FB_APP_ID", "2167420754104440")
-FB_APP_SECRET = os.getenv("FB_APP_SECRET", "")
+FB_APP_ID     = os.getenv("FB_APP_ID", "474990059818223")
+FB_APP_SECRET = os.getenv("FB_APP_SECRET", "e0c3ce178d9cab9b68f66e05362d21bf")
 FB_REDIRECT   = "https://autopostleey.com/facebook-callback.html"
 
 @app.get("/facebook/auth")
