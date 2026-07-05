@@ -669,6 +669,7 @@ async def facebook_auth(user_id: str = ""):
         "scope":         "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_metadata",
         "state":         user_id,  # Pass user_id through state
         "response_type": "code",
+        "auth_type":     "rerequest",
     }
     url = "https://www.facebook.com/dialog/oauth?" + urllib.parse.urlencode(params)
     from fastapi.responses import RedirectResponse
