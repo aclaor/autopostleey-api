@@ -713,7 +713,7 @@ async def facebook_callback(code: str = "", state: str = "", error: str = ""):
         async with _httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(
                 "https://graph.facebook.com/v21.0/me/accounts",
-                params={"access_token": user_token}
+                params={"access_token": user_token, "limit": 100}
             )
             pages_data = r.json()
 
