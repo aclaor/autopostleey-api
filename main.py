@@ -666,7 +666,7 @@ async def facebook_auth(user_id: str = ""):
     params = {
         "client_id":     FB_APP_ID,
         "redirect_uri":  FB_REDIRECT,
-        "scope":         "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_metadata,instagram_basic,instagram_content_publish",
+        "scope":         "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_metadata",
         "state":         user_id,  # Pass user_id through state
         "response_type": "code",
     }
